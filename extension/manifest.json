@@ -1,0 +1,43 @@
+{
+  "manifest_version": 3,
+  "name": "Exam Question Scraper",
+  "version": "1.4.0",
+  "description": "Auto-scrapes exam /view pages on the configured sites as you browse them, and exports the collected questions to PDF.",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "downloads",
+    "storage"
+  ],
+  "host_permissions": [
+    "*://*.examgrill.com/*",
+    "*://*.testholic.com/*",
+    "*://*.examtopics.com/*",
+    "http://localhost/*"
+  ],
+  "optional_host_permissions": [
+    "*://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.examgrill.com/*",
+        "*://*.testholic.com/*",
+        "*://*.examtopics.com/*"
+      ],
+      "js": [
+        "sites.generated.js",
+        "scraper.js",
+        "autoscrape.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "Exam Question Scraper",
+    "default_popup": "popup.html"
+  }
+}

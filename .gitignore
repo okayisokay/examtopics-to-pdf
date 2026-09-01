@@ -1,0 +1,5 @@
+.env
+.env.local
+!.env.sample
+node_modules/
+extension/datastore.generated.js
