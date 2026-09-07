@@ -1,10 +1,11 @@
 # Exam Questions to PDF (Chrome extension)
 
 **[Install from the Chrome Web Store](https://chromewebstore.google.com/detail/exam-questions-to-pdf/pkibkbaiknmegdhkengmjbjgeaaoihop)**
+- (Note: It works on pages you can access, so you or your friend need to have atleast contributor test engine access. Then you will be able to visit those pages and download them as PDF.)
 
 [![Install Exam Questions to PDF from the Chrome Web Store](assets/chrome-extension.jpg)](https://chromewebstore.google.com/detail/exam-questions-to-pdf/pkibkbaiknmegdhkengmjbjgeaaoihop)
 
-<video src="assets/examtopics%20to%20pdf.mp4" controls title="Exam Questions to PDF demo"></video>
+![Exam Questions to PDF demo](assets/examtopics-to-pdf.gif)
 
 [Watch the demo video](assets/examtopics%20to%20pdf.mp4)
 
