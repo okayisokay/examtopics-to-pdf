@@ -43,6 +43,31 @@ function escapeText(s) {
   return s.replace(/[\\()]/g, '\\$&');
 }
 
+/* ------------------------------------------------------------------ theme */
+
+/**
+ * One palette for the whole document, as PDF DeviceRGB triples. The names and values
+ * are Tailwind's, because the pages this scrapes are styled with it — the export then
+ * reads as the same product rather than as a generic text dump.
+ */
+const COLOR = {
+  ink: [0.059, 0.09, 0.165], // slate-900, question and choice text
+  body: [0.2, 0.255, 0.333], // slate-700, explanation text
+  muted: [0.392, 0.455, 0.545], // slate-500, secondary lines
+  faint: [0.58, 0.639, 0.722], // slate-400, metadata
+  line: [0.886, 0.91, 0.941], // slate-200, card borders
+  sky: [0.055, 0.647, 0.914], // sky-500, question headers
+  skyDark: [0.008, 0.518, 0.78], // sky-600, cover banner
+  skyDeep: [0.012, 0.412, 0.631], // sky-700, labels on tinted panels
+  skyEdge: [0.729, 0.902, 0.984], // sky-200, tinted-panel border
+  skyPale: [0.878, 0.949, 0.996], // sky-100, badge fill
+  skyTint: [0.941, 0.976, 1], // sky-50, explanation background
+  good: [0.02, 0.588, 0.412], // emerald-600, the answer
+  goodEdge: [0.431, 0.906, 0.718], // emerald-300, correct-choice border
+  goodTint: [0.925, 0.992, 0.961], // emerald-50, correct-choice fill
+  white: [1, 1, 1],
+};
+
 /* ---------------------------------------------------------------- metrics */
 
 // Adobe AFM advance widths (1/1000 em) for codes 32..126.
@@ -115,6 +140,46 @@ function wrap(s, font, size, max) {
 /* -------------------------------------------------------------------- doc */
 
 const num = (n) => (Math.round(n * 100) / 100).toString();
+const chan = (n) => (Math.round(n * 1000) / 1000).toString();
+
+/** Colour operator. A colour is either an [r,g,b] triple or a plain grey level. */
+function paint(color, stroke = false) {
+  return Array.isArray(color)
+    ? `${chan(color[0])} ${chan(color[1])} ${chan(color[2])} ${stroke ? 'RG' : 'rg'}`
+    : `${chan(color)} ${stroke ? 'G' : 'g'}`;
+}
+
+/** Rectangle path, with rounded corners when `r` > 0. */
+function roundPath(x, y, w, h, r) {
+  r = Math.min(r, w / 2, h / 2);
+  if (r <= 0) return `${num(x)} ${num(y)} ${num(w)} ${num(h)} re`;
+  const k = r * 0.4477; // control-point offset for a quarter-circle bezier
+  const x2 = x + w;
+  const y2 = y + h;
+  return (
+    `${num(x + r)} ${num(y)} m ` +
+    `${num(x2 - r)} ${num(y)} l ` +
+    `${num(x2 - k)} ${num(y)} ${num(x2)} ${num(y + k)} ${num(x2)} ${num(y + r)} c ` +
+    `${num(x2)} ${num(y2 - r)} l ` +
+    `${num(x2)} ${num(y2 - k)} ${num(x2 - k)} ${num(y2)} ${num(x2 - r)} ${num(y2)} c ` +
+    `${num(x + r)} ${num(y2)} l ` +
+    `${num(x + k)} ${num(y2)} ${num(x)} ${num(y2 - k)} ${num(x)} ${num(y2 - r)} c ` +
+    `${num(x)} ${num(y + r)} l ` +
+    `${num(x)} ${num(y + k)} ${num(x + k)} ${num(y)} ${num(x + r)} ${num(y)} c h`
+  );
+}
+
+/** One drawing operator for a filled and/or stroked box. Returns '' when it is neither. */
+function boxOp(x, y, w, h, { fill = null, stroke = null, width = 0.7, radius = 0 } = {}) {
+  if (!fill && !stroke) return '';
+  const style = fill && stroke ? 'B' : fill ? 'f' : 'S';
+  return (
+    'q ' +
+    (fill ? `${paint(fill)} ` : '') +
+    (stroke ? `${paint(stroke, true)} ${num(width)} w ` : '') +
+    `${roundPath(x, y, w, h, radius)} ${style} Q`
+  );
+}
 
 /** Image bytes as a latin-1 string, so they concatenate with the rest of the file. */
 function bytesToLatin1(bytes) {
@@ -127,12 +192,13 @@ function bytesToLatin1(bytes) {
 
 /** A4 portrait, one content stream per page. */
 class Pdf {
-  constructor({ width = 595.28, height = 841.89, margin = 56, footer = 34 } = {}) {
+  constructor({ width = 595.28, height = 841.89, margin = 52, footer = 34 } = {}) {
     this.width = width;
     this.height = height;
     this.margin = margin;
     this.footerY = footer;
     this.pages = [];
+    this.blocks = []; // panels still open, innermost last
     this.images = []; // { name, desc }, shared by every page's resource dict
     this.imageNames = new Map();
     this.addPage();
@@ -142,36 +208,88 @@ class Pdf {
     return this.width - this.margin;
   }
 
+  /**
+   * Each page keeps its painted backgrounds apart from its text and writes them first,
+   * so a card's fill can be emitted after the text that decided how tall it is.
+   */
   addPage() {
-    this.ops = [];
-    this.pages.push(this.ops);
+    // A panel that is still open spans the page break: close its run here, and start
+    // another at the top of the page that follows.
+    for (const b of this.blocks) b.segments[b.segments.length - 1].bottom = this.footerY + 14;
+    this.page = { bg: [], ops: [] };
+    this.ops = this.page.ops;
+    this.pages.push(this.page);
     this.y = this.height - this.margin;
+    for (const b of this.blocks) b.segments.push({ page: this.page, top: this.y + 7 });
   }
 
   /** Break to a new page unless `height` points still fit above the footer. */
   reserve(height) {
-    if (this.y - height < this.footerY + 16) this.addPage();
+    if (this.y - height < this.footerY + 22) this.addPage();
   }
 
   gap(h) {
     this.y -= h;
   }
 
-  draw(s, x, y, font, size, gray) {
+  box(x, y, w, h, opts = {}) {
+    const op = boxOp(x, y, w, h, opts);
+    if (op) this.ops.push(op);
+  }
+
+  draw(s, x, y, font, size, color = COLOR.ink) {
     this.ops.push(
-      `BT /${FONTS[font].res} ${num(size)} Tf ${num(gray)} g ${num(x)} ${num(y)} Td ` +
+      `BT /${FONTS[font].res} ${num(size)} Tf ${paint(color)} ${num(x)} ${num(y)} Td ` +
         `(${escapeText(s)}) Tj ET`
     );
   }
 
-  rule(gray = 0.8) {
+  /** Right-aligned single line, for the topic tag in a question header. */
+  drawRight(s, xRight, y, font, size, color) {
+    this.draw(s, xRight - widthOf(s, font, size), y, font, size, color);
+  }
+
+  rule(color = COLOR.line) {
     this.reserve(8);
     this.y -= 6;
     this.ops.push(
-      `${num(gray)} G 0.5 w ${num(this.margin)} ${num(this.y)} m ` +
-        `${num(this.right)} ${num(this.y)} l S`
+      `q ${paint(color, true)} 0.7 w ${num(this.margin)} ${num(this.y)} m ` +
+        `${num(this.right)} ${num(this.y)} l S Q`
     );
     this.y -= 6;
+  }
+
+  /**
+   * Open a panel — a filled and/or outlined box whose height is whatever the content
+   * written before the matching endBlock() turns out to be. Panels nest, and one that
+   * runs past the bottom of a page is repainted on the next.
+   */
+  beginBlock(style = {}) {
+    const { padTop = 7, minHeight = 24 } = style;
+    this.reserve(minHeight);
+    this.blocks.push({ style, segments: [{ page: this.page, top: this.y }] });
+    this.y -= padTop;
+  }
+
+  endBlock() {
+    const block = this.blocks.pop();
+    const { indent = 0, padBottom = 8, bar = 0, barColor = COLOR.line, ...boxStyle } = block.style;
+    this.y -= padBottom;
+    block.segments[block.segments.length - 1].bottom = this.y;
+
+    const x = this.margin + indent;
+    const w = this.right - x;
+    for (const seg of block.segments) {
+      const h = seg.top - seg.bottom;
+      if (h <= 0.5) continue;
+      const ops = [boxOp(x, seg.bottom, w, h, boxStyle)];
+      if (bar) {
+        ops.push(boxOp(x, seg.bottom, bar, h, { fill: barColor, radius: Math.min(bar / 2, 1.5) }));
+      }
+      // Unshifted, not pushed: an enclosing panel closes last but has to be painted
+      // underneath the nested panels that closed before it.
+      seg.page.bg.unshift(...ops.filter(Boolean));
+    }
   }
 
   /**
@@ -182,16 +300,18 @@ class Pdf {
     const {
       font = 'reg',
       size = 10,
-      gray = 0,
-      leading = size * 1.32,
+      color = COLOR.ink,
+      leading = size * 1.36,
       indent = 0,
+      rightInset = 0,
       label = '',
       labelFont = 'bold',
+      labelColor = color,
       labelIndent = 0,
     } = opts;
 
     const x = this.margin + indent;
-    const max = this.right - x;
+    const max = this.right - rightInset - x;
     const marker = toWinAnsi(label);
     let first = true;
 
@@ -202,8 +322,10 @@ class Pdf {
       for (const line of wrap(toWinAnsi(hard), font, size, max)) {
         this.reserve(leading);
         this.y -= leading;
-        if (first && marker) this.draw(marker, this.margin + labelIndent, this.y, labelFont, size, gray);
-        if (line) this.draw(line, x, this.y, font, size, gray);
+        if (first && marker) {
+          this.draw(marker, this.margin + labelIndent, this.y, labelFont, size, labelColor);
+        }
+        if (line) this.draw(line, x, this.y, font, size, color);
         first = false;
       }
     }
@@ -213,7 +335,7 @@ class Pdf {
    * Place an image, scaled to fit the column and never taller than one page. `desc` is
    * what images.js produces: { key, width, height, bytes, filter, colorSpace }.
    */
-  image(desc, { indent = 0, maxHeight = 460 } = {}) {
+  image(desc, { indent = 0, rightInset = 0, maxHeight = 460 } = {}) {
     let name = this.imageNames.get(desc.key);
     if (!name) {
       name = `Im${this.images.length + 1}`;
@@ -221,7 +343,7 @@ class Pdf {
       this.images.push({ name, desc });
     }
 
-    const columnWidth = this.right - (this.margin + indent);
+    const columnWidth = this.right - rightInset - (this.margin + indent);
     const cap = Math.min(maxHeight, this.height - 2 * this.margin - 20);
     // Never upscale: a 200px diagram stays 200px rather than turning into a blur.
     const scale = Math.min(columnWidth / desc.width, cap / desc.height, 1);
@@ -236,13 +358,26 @@ class Pdf {
     this.y -= 4;
   }
 
-  /** "slug • Page 2 of 7", centred, on every page. Call once, after the layout. */
+  /** Hairline, slug and "Page 2 of 7" on every page. Call once, after the layout. */
   footers(text) {
     const s = toWinAnsi(text);
-    this.pages.forEach((ops, i) => {
-      const label = `${s}${s ? '  •  ' : ''}Page ${i + 1} of ${this.pages.length}`;
-      const x = (this.width - widthOf(label, 'reg', 8)) / 2;
-      ops.push(`BT /F1 8 Tf 0.55 g ${num(x)} ${num(this.footerY)} Td (${escapeText(label)}) Tj ET`);
+    this.pages.forEach((page, i) => {
+      const label = `Page ${i + 1} of ${this.pages.length}`;
+      const y = this.footerY;
+      page.ops.push(
+        `q ${paint(COLOR.line, true)} 0.7 w ${num(this.margin)} ${num(y + 13)} m ` +
+          `${num(this.right)} ${num(y + 13)} l S Q`
+      );
+      if (s) {
+        page.ops.push(
+          `BT /F1 8 Tf ${paint(COLOR.faint)} ${num(this.margin)} ${num(y)} Td ` +
+            `(${escapeText(s)}) Tj ET`
+        );
+      }
+      const x = this.right - widthOf(label, 'reg', 8);
+      page.ops.push(
+        `BT /F1 8 Tf ${paint(COLOR.muted)} ${num(x)} ${num(y)} Td (${escapeText(label)}) Tj ET`
+      );
     });
   }
 
@@ -276,8 +411,8 @@ class Pdf {
       (xobjects ? ` /XObject << ${xobjects} >>` : '') +
       ' >>';
 
-    const kids = this.pages.map((ops) => {
-      const stream = ops.join('\n');
+    const kids = this.pages.map((page) => {
+      const stream = page.bg.concat(page.ops).join('\n');
       const contentId = add(`<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`);
       const pageId = add(
         `<< /Type /Page /Parent ${pagesId} 0 R ` +
@@ -298,7 +433,7 @@ class Pdf {
     const infoId = add(
       `<< /Title (${escapeText(toWinAnsi(title))}) ` +
         `/Subject (${escapeText(toWinAnsi(subject))}) ` +
-        `/Producer (Exam Question Scraper) /CreationDate (${stamp}) >>`
+        `/Producer (Exam Questions to PDF) /CreationDate (${stamp}) >>`
     );
 
     let out = '%PDF-1.4\n%\xe2\xe3\xcf\xd3\n';
@@ -321,7 +456,9 @@ class Pdf {
 
 /* ------------------------------------------------------------- exam layout */
 
-const CHOICE_INDENT = 22;
+const CHOICE_LETTER_X = 12; // gutter for "A.", from the card's left edge
+const CHOICE_TEXT_X = 30; // where the choice's own text starts
+const CARD_PAD_RIGHT = 14;
 
 /** Splits on the marker cleanText() leaves behind for an <img>, keeping the URL. */
 const IMG_SPLIT = /\[IMG:\s*([^\]]+?)\s*\]/;
@@ -332,7 +469,7 @@ const IMG_SPLIT = /\[IMG:\s*([^\]]+?)\s*\]/;
  * nothing silently vanishes from the export.
  */
 function blockWithImages(doc, text, images, opts = {}) {
-  const { label = '', indent = 0, ...rest } = opts;
+  const { label = '', indent = 0, rightInset = 0, ...rest } = opts;
   const parts = String(text ?? '').split(IMG_SPLIT);
   let pending = label; // hanging marker ("B.") still waiting for its first line
   let drew = false;
@@ -341,89 +478,277 @@ function blockWithImages(doc, text, images, opts = {}) {
     if (i % 2) {
       const desc = images && images.get(part);
       if (desc) {
-        if (pending) doc.paragraph('', { ...rest, indent, label: pending });
-        doc.image(desc, { indent });
+        if (pending) doc.paragraph('', { ...rest, indent, rightInset, label: pending });
+        doc.image(desc, { indent, rightInset });
       } else {
-        doc.paragraph(`[IMG: ${part}]`, { ...rest, indent, label: pending, gray: 0.45 });
+        doc.paragraph(`[IMG: ${part}]`, {
+          ...rest,
+          indent,
+          rightInset,
+          label: pending,
+          color: COLOR.faint,
+        });
       }
     } else {
       const chunk = part.trim();
       if (!chunk) return;
-      doc.paragraph(chunk, { ...rest, indent, label: pending });
+      doc.paragraph(chunk, { ...rest, indent, rightInset, label: pending });
     }
     pending = '';
     drew = true;
   });
 
-  if (!drew && pending) doc.paragraph('', { ...rest, indent, label: pending });
+  if (!drew && pending) doc.paragraph('', { ...rest, indent, rightInset, label: pending });
+}
+
+/**
+ * Sites that publish a rationale under each option leave it in the choice's own text,
+ * one hard line below the option itself. Splitting the two lets the option read as the
+ * answer and the rationale as a supporting note. Anything not of that shape — a single
+ * line, an image, a first line as long as the rest — is returned untouched.
+ */
+function splitChoice(text) {
+  const raw = String(text ?? '');
+  if (raw.includes('[IMG:')) return [raw, ''];
+  const lines = raw.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+  if (lines.length < 2 || lines[0].length > 120) return [raw, ''];
+  const rest = lines.slice(1).join('\n');
+  return rest.length > lines[0].length ? [lines[0], rest] : [raw, ''];
+}
+
+/**
+ * Hotspot and drag-drop questions put a whole "Answer Area" image inside the site's
+ * correct-answer box, above the prose that walks through it. That image is explanation
+ * material, not an answer key of its own, so an image-only correct answer is handed back
+ * as the second half of the pair and rendered with the explanation. Anything with real
+ * text alongside — a letter, a sentence — stays an answer.
+ */
+function splitAnswerImages(correctAnswer) {
+  const raw = String(correctAnswer ?? '');
+  if (!raw.includes('[IMG:')) return [raw, ''];
+  const words = raw
+    .split(IMG_SPLIT)
+    .filter((_, i) => i % 2 === 0)
+    .join(' ')
+    .trim();
+  return words ? [raw, ''] : ['', raw];
+}
+
+/** The sky band that opens every question. */
+function questionHeader(doc, q, index) {
+  const h = 23;
+  // Keep the band with the first lines of its question rather than orphaning it.
+  doc.reserve(h + 46);
+  doc.y -= h;
+  doc.box(doc.margin, doc.y, doc.right - doc.margin, h, { fill: COLOR.sky, radius: 5 });
+  doc.draw(
+    toWinAnsi(`Question #${q.question_number || index + 1}`),
+    doc.margin + 12,
+    doc.y + 7.4,
+    'bold',
+    10.5,
+    COLOR.white
+  );
+  const topic = toWinAnsi(q.topic || '');
+  if (topic) doc.drawRight(topic, doc.right - 12, doc.y + 7.6, 'reg', 8.5, COLOR.skyPale);
+  doc.y -= 9;
+}
+
+/** The tick that marks the correct option, where the site shows one. */
+function checkMark(doc, x, y, size = 9) {
+  const s = size / 9;
+  doc.ops.push(
+    `q ${paint(COLOR.good, true)} 1.4 w 1 J 1 j ` +
+      `${num(x)} ${num(y + 3.4 * s)} m ${num(x + 3 * s)} ${num(y + 0.6 * s)} l ` +
+      `${num(x + 8.4 * s)} ${num(y + 7 * s)} l S Q`
+  );
+}
+
+/** One option: a bordered card, tinted green when it is the marked answer. */
+function choiceCard(doc, choice, images) {
+  const correct = !!choice.markedCorrect;
+  const [head, why] = splitChoice(choice.text);
+  const rightInset = correct ? CARD_PAD_RIGHT + 16 : CARD_PAD_RIGHT;
+
+  doc.beginBlock({
+    fill: correct ? COLOR.goodTint : null,
+    stroke: correct ? COLOR.goodEdge : COLOR.line,
+    radius: 4.5,
+    padTop: 7.5,
+    padBottom: 7.5,
+    minHeight: 30,
+  });
+
+  const top = doc.y;
+  const page = doc.page;
+  blockWithImages(doc, head, images, {
+    size: 9.8,
+    leading: 13,
+    color: COLOR.ink,
+    font: correct ? 'bold' : 'reg',
+    indent: CHOICE_TEXT_X,
+    rightInset,
+    label: choice.letter ? `${choice.letter}.` : '•',
+    labelFont: 'bold',
+    labelColor: correct ? COLOR.good : COLOR.muted,
+    labelIndent: CHOICE_LETTER_X,
+  });
+  // Skipped when the option spilled onto the next page, where the tick would end up
+  // beside nothing.
+  if (correct && doc.page === page) checkMark(doc, doc.right - CARD_PAD_RIGHT - 10, top - 11);
+
+  if (why) {
+    doc.gap(3);
+    doc.beginBlock({
+      indent: CHOICE_TEXT_X,
+      bar: 1.6,
+      barColor: correct ? COLOR.goodEdge : COLOR.line,
+      padTop: 1,
+      padBottom: 1,
+      minHeight: 16,
+    });
+    blockWithImages(doc, why, images, {
+      size: 8.8,
+      leading: 11.6,
+      color: COLOR.muted,
+      indent: CHOICE_TEXT_X + 9,
+      rightInset: CARD_PAD_RIGHT,
+    });
+    doc.endBlock();
+  }
+
+  doc.endBlock();
+  doc.gap(5);
+}
+
+/** A row of small pills: the answer key, and the crowd's pick. */
+function badgeRow(doc, items) {
+  const size = 8.5;
+  const h = 15;
+  const padX = 8;
+  doc.reserve(h * 2 + 6);
+  doc.y -= h;
+  let x = doc.margin;
+  for (const item of items) {
+    const s = toWinAnsi(item.text);
+    const w = widthOf(s, 'bold', size) + padX * 2;
+    if (x > doc.margin && x + w > doc.right) {
+      doc.y -= h + 4;
+      x = doc.margin;
+    }
+    doc.box(x, doc.y, Math.min(w, doc.right - x), h, {
+      fill: item.fill,
+      stroke: item.stroke || null,
+      radius: 3.5,
+    });
+    doc.draw(s, x + padX, doc.y + 4.6, 'bold', size, item.color);
+    x += w + 6;
+  }
 }
 
 function questionBlock(doc, q, index, images) {
-  // Keep the heading with the start of its question rather than orphaning it.
-  doc.reserve(58);
-
-  doc.paragraph(`Question ${q.question_number || index + 1}`, {
-    font: 'bold',
-    size: 11.5,
-    leading: 15,
-  });
+  questionHeader(doc, q, index);
 
   const bits = [
-    q.topic,
     q.question_id && `ID ${q.question_id}`,
     q.source_page && `source page ${q.source_page}`,
     q.discussion_count && `${q.discussion_count} comments`,
   ].filter(Boolean);
-  if (bits.length) doc.paragraph(bits.join('  •  '), { size: 8.5, gray: 0.45, leading: 11 });
+  if (bits.length) {
+    doc.paragraph(bits.join('  •  '), { size: 8, color: COLOR.faint, leading: 10.5 });
+    doc.gap(1);
+  }
 
   if (q.question_text) {
-    doc.gap(4);
-    blockWithImages(doc, q.question_text, images, { size: 10, leading: 13.2 });
+    doc.gap(3);
+    blockWithImages(doc, q.question_text, images, { size: 10.2, leading: 13.8, color: COLOR.ink });
   }
 
   if (q.choices?.length) {
-    doc.gap(5);
-    for (const c of q.choices) {
-      // The correct choice is bold, so the answer reads without hunting for the key.
-      blockWithImages(doc, c.text, images, {
-        size: 10,
-        leading: 13.2,
-        indent: CHOICE_INDENT,
-        font: c.markedCorrect ? 'bold' : 'reg',
-        label: c.letter ? `${c.letter}.` : '•',
-        labelFont: c.markedCorrect ? 'bold' : 'reg',
-        labelIndent: 6,
-      });
-    }
+    doc.gap(8);
+    for (const c of q.choices) choiceCard(doc, c, images);
   }
 
-  doc.gap(5);
-  if (q.correct_answer) {
-    // Not always a letter: hotspot and drag-drop answers are images, so this goes
-    // through blockWithImages the same way the question and the explanation do.
-    blockWithImages(doc, `Correct answer: ${q.correct_answer}`, images, {
-      font: 'bold',
-      size: 9.5,
-      leading: 12,
-    });
-  }
+  doc.gap(3);
+  const [answerText, answerImages] = splitAnswerImages(q.correct_answer);
+  // Not always a letter: a few sites give a whole sentence, which does not fit in a pill,
+  // so those keep the block form below.
+  const answerLine = answerText ? `Correct answer: ${answerText}` : '';
+  const asPill =
+    answerLine &&
+    !answerLine.includes('[IMG:') &&
+    widthOf(toWinAnsi(answerLine), 'bold', 8.5) + 16 <= doc.right - doc.margin;
+  const pills = [];
+  if (asPill) pills.push({ text: answerLine, fill: COLOR.good, color: COLOR.white });
   if (q.most_voted) {
     const votes = q.total_votes ? ` (${q.total_votes} votes)` : '';
-    doc.paragraph(`Most voted: ${q.most_voted}${votes}`, { font: 'bold', size: 9.5, leading: 12 });
-  }
-  if (q.vote_distribution) {
-    doc.paragraph(q.vote_distribution, { size: 8.5, gray: 0.45, leading: 11 });
-  }
-  if (q.answer_description) {
-    doc.gap(3);
-    doc.paragraph('Explanation', { font: 'bold', size: 9, leading: 11.5 });
-    blockWithImages(doc, q.answer_description, images, {
-      font: 'obl',
-      size: 9,
-      gray: 0.2,
-      leading: 11.8,
+    pills.push({
+      text: `Most voted: ${q.most_voted}${votes}`,
+      fill: COLOR.skyPale,
+      stroke: COLOR.skyEdge,
+      color: COLOR.skyDeep,
     });
   }
+  // The answer always comes first, whichever shape it took.
+  if (answerText && !asPill) {
+    doc.paragraph('Correct answer', { font: 'bold', size: 9, color: COLOR.good, leading: 12 });
+    blockWithImages(doc, answerText, images, { size: 9.5, leading: 12, color: COLOR.body });
+    doc.gap(2);
+  }
+  if (pills.length) badgeRow(doc, pills);
+  if (q.vote_distribution) {
+    doc.gap(2);
+    doc.paragraph(q.vote_distribution, { size: 8, color: COLOR.faint, leading: 10.5 });
+  }
+
+  const explanation = [answerImages, q.answer_description].filter(Boolean).join('\n');
+  if (explanation) {
+    doc.gap(7);
+    doc.beginBlock({
+      fill: COLOR.skyTint,
+      stroke: COLOR.skyEdge,
+      radius: 4,
+      bar: 3,
+      barColor: COLOR.sky,
+      padTop: 8,
+      padBottom: 8,
+      minHeight: 34,
+    });
+    doc.paragraph('EXPLANATION', {
+      font: 'bold',
+      size: 7.6,
+      color: COLOR.skyDeep,
+      leading: 10,
+      indent: 14,
+    });
+    doc.gap(1);
+    blockWithImages(doc, explanation, images, {
+      size: 9,
+      leading: 12,
+      color: COLOR.body,
+      indent: 14,
+      rightInset: CARD_PAD_RIGHT,
+    });
+    doc.endBlock();
+  }
+}
+
+/** The sky banner on page one: exam name, with the page title underneath. */
+function coverBanner(doc, exam, heading) {
+  const width = doc.right - doc.margin;
+  const subtitle =
+    exam.title && exam.title !== heading
+      ? wrap(toWinAnsi(exam.title), 'reg', 9.5, width - 32).slice(0, 2)
+      : [];
+  const h = 44 + subtitle.length * 12;
+
+  doc.y -= h;
+  doc.box(doc.margin, doc.y, width, h, { fill: COLOR.skyDark, radius: 7 });
+  doc.draw(toWinAnsi(heading), doc.margin + 16, doc.y + h - 26, 'bold', 17, COLOR.white);
+  subtitle.forEach((line, i) => {
+    doc.draw(line, doc.margin + 16, doc.y + h - 40 - i * 12, 'reg', 9.5, COLOR.skyPale);
+  });
+  doc.y -= 10;
 }
 
 /**
@@ -435,29 +760,23 @@ function buildExamPdf(exam, questions, summary = '', images = null) {
   const doc = new Pdf();
   const heading = exam.exam_slug || exam.exam_key || 'exam';
 
-  doc.paragraph(heading, { font: 'bold', size: 17, leading: 21 });
-  if (exam.title && exam.title !== heading) {
-    doc.paragraph(exam.title, { size: 10, gray: 0.35, leading: 13 });
-  }
-  doc.gap(2);
+  coverBanner(doc, exam, heading);
   const exported = `exported ${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC`;
   doc.paragraph([summary, exported].filter(Boolean).join('  •  '), {
     size: 8.5,
-    gray: 0.45,
+    color: COLOR.muted,
     leading: 11,
   });
-  if (exam.exam_key) doc.paragraph(exam.exam_key, { size: 8.5, gray: 0.45, leading: 11 });
+  if (exam.exam_key) doc.paragraph(exam.exam_key, { size: 8.5, color: COLOR.faint, leading: 11 });
   doc.rule();
 
   if (!questions.length) {
     doc.gap(6);
-    doc.paragraph('No questions collected for this exam.', { size: 10, gray: 0.4 });
+    doc.paragraph('No questions collected for this exam.', { size: 10, color: COLOR.muted });
   }
   questions.forEach((q, i) => {
-    if (i) doc.rule(0.85);
-    doc.gap(6);
+    doc.gap(i ? 16 : 6);
     questionBlock(doc, q, i, images);
-    doc.gap(6);
   });
 
   doc.footers(heading);

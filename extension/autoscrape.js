@@ -1,5 +1,5 @@
 /**
- * Content script. Runs on every local.something.com page, but only does something
+ * Content script. Runs on every page of the configured sites, but only does something
  * on a /view page. Waits for the question cards to be in the DOM, scrapes, and
  * hands the result to the service worker, which stores it under the exam key.
  * Functions come from scraper.js, loaded before this file in the same world.

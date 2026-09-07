@@ -83,10 +83,9 @@ function uploadSummary(res) {
  * [IMG: url] marker stays in the text. The PDF is the deliverable: a datastore that
  * is unconfigured or down only appends to the status line.
  */
-async function exportPdf(exam, questions, pages, summary, urls, granted, button) {
+async function exportPdf(exam, questions, pages, summary, urls, button) {
   button.disabled = true;
   try {
-    await granted; // resolves false when the host prompt was declined; fetches then fail
     let images = new Map();
     let failures = [];
     if (urls.length) {
@@ -165,15 +164,11 @@ function examCard(exam, isCurrent) {
   const pdf = document.createElement('button');
   pdf.textContent = 'Download as PDF';
   pdf.onclick = () => {
-    // Ask for the image hosts first, synchronously: chrome.permissions.request is only
-    // honoured while the click gesture is still live, so nothing may be awaited before it.
+    // Images are fetched with the host permissions declared in the manifest — there is no
+    // all-sites optional permission to ask for, so one hosted off those origins simply
+    // fails to load and keeps its [IMG: url] marker in the PDF.
     const urls = imageUrlsIn(questions);
-    const origins = imageOrigins(urls);
-    const granted = origins.length
-      ? chrome.permissions.request({ origins }).catch(() => false)
-      : Promise.resolve(true);
-
-    exportPdf(exam, questions, pages, meta.textContent, urls, granted, pdf);
+    exportPdf(exam, questions, pages, meta.textContent, urls, pdf);
   };
 
   const clear = document.createElement('button');
@@ -208,7 +203,7 @@ async function render() {
     const p = document.createElement('div');
     p.className = 'empty muted';
     p.textContent =
-      'Nothing collected yet. Open a /view page on local.something.com — it is scraped automatically as you browse.';
+      'Nothing collected yet. Open a /view page on a configured exam site — it is scraped automatically as you browse.';
     box.append(p);
     return;
   }

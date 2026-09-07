@@ -14,7 +14,7 @@ const MAX_CHOICE_COLS = 8; // A..H
  * where those globals are absent — hence the fallbacks.
  */
 const HOST_PATTERNS =
-  typeof SCRAPE_HOST_PATTERNS !== 'undefined' ? SCRAPE_HOST_PATTERNS : [/(^|\.)something\.com$/i];
+  typeof SCRAPE_HOST_PATTERNS !== 'undefined' ? SCRAPE_HOST_PATTERNS : [/(^|\.)example\.com$/i];
 const VIEW_PATTERN =
   typeof VIEW_PATH_PATTERN !== 'undefined' ? VIEW_PATH_PATTERN : /\/view\/?$|\/view\/\d+\/?$/;
 
@@ -25,8 +25,8 @@ function isSupportedHost(url = location.href) {
 
 /**
  * True for .../view, .../view/ and .../view/2 — e.g.
- * http://local.something.com/exams/amazon/aws-certified-advanced-networking-specialty-ans-c01/view/
- * https://something.com/exams/amazon/aws-...-ans-c01/view/2
+ * https://www.examtopics.com/exams/amazon/aws-certified-advanced-networking-specialty-ans-c01/view/
+ * https://www.examtopics.com/exams/amazon/aws-...-ans-c01/view/2
  */
 function isViewUrl(url = location.href) {
   return VIEW_PATTERN.test(new URL(url).pathname);
@@ -47,7 +47,7 @@ function pageNumberFromUrl(url = location.href) {
 
 /**
  * Identity of the exam, shared by all of its pages: origin + path up to and including /view.
- * "www." is normalised away so www.something.com and something.com are one bucket; other
+ * "www." is normalised away so www.example.com and example.com are one bucket; other
  * subdomains (local., staging.) stay distinct, as they are genuinely different data.
  */
 function examKeyFromUrl(url = location.href) {

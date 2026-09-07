@@ -51,9 +51,17 @@ if (source === SAMPLE_FILE) {
 }
 const env = parseEnv(fs.readFileSync(source, 'utf8'));
 
+// Chrome match patterns have no place for a port, so "localhost:3000" is accepted and the
+// port dropped — the pattern then covers every port on that host, which is what we want.
+const dropped = [];
 const hosts = (env.SCRAPE_HOSTS || '')
   .split(',')
   .map((h) => h.trim().replace(/^\*?\.?/, '').replace(/\/.*$/, ''))
+  .map((h) => {
+    const bare = h.replace(/:\d+$/, '');
+    if (bare !== h) dropped.push(h);
+    return bare;
+  })
   .filter(Boolean);
 if (!hosts.length) fail('SCRAPE_HOSTS is empty');
 
@@ -67,8 +75,13 @@ try {
 }
 
 for (const h of hosts) {
-  if (!/^[a-z0-9.-]+$/i.test(h)) fail(`"${h}" does not look like a hostname (no ports or paths)`);
-  if (h.includes(':')) fail(`"${h}" contains a port — Chrome match patterns ignore ports, drop it`);
+  if (!/^[a-z0-9.-]+$/i.test(h)) fail(`"${h}" does not look like a hostname`);
+}
+if (dropped.length) {
+  console.warn(
+    `build.js: dropped the port from ${dropped.join(', ')} — ` +
+      'match patterns cover every port on the host'
+  );
 }
 
 // "*.example.com" also matches the bare "example.com" in Chrome match patterns.

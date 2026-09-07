@@ -63,7 +63,7 @@ async function savePage(data, tabId) {
     chrome.action.setBadgeText({ tabId, text: String(stats.questions) });
     chrome.action.setTitle({
       tabId,
-      title: `Exam Question Scraper — ${stats.questions} questions across ${stats.pages} page(s) of this exam`,
+      title: `Exam Questions to PDF — ${stats.questions} questions across ${stats.pages} page(s) of this exam`,
     });
   }
   return stats;

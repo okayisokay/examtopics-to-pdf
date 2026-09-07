@@ -32,20 +32,6 @@ function imageUrlsIn(questions) {
   return urls;
 }
 
-/** The origins those URLs live on, as match patterns for chrome.permissions. */
-function imageOrigins(urls) {
-  const origins = new Set();
-  for (const url of urls) {
-    try {
-      const u = new URL(url);
-      if (u.protocol === 'http:' || u.protocol === 'https:') origins.add(`${u.origin}/*`);
-    } catch (e) {
-      /* not a URL we can ask for */
-    }
-  }
-  return [...origins];
-}
-
 /**
  * Dimensions of a baseline JPEG, or null when it is one we should not pass through:
  * progressive scans and CMYK are outside what PDF's DCTDecode filter accepts.

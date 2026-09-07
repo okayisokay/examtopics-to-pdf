@@ -1,8 +1,14 @@
 {
   "manifest_version": 3,
-  "name": "Exam Question Scraper",
+  "name": "Exam Questions to PDF",
   "version": "1.4.0",
-  "description": "Auto-scrapes exam /view pages on the configured sites as you browse them, and exports the collected questions to PDF.",
+  "description": "Download the pdf version of questions from public sites.",
+  "icons": {
+    "16": "icons/16.png",
+    "32": "icons/32.png",
+    "48": "icons/48.png",
+    "128": "icons/128.png"
+  },
   "permissions": [
     "activeTab",
     "scripting",
@@ -10,13 +16,11 @@
     "storage"
   ],
   "host_permissions": [
-    "*://*.examgrill.com/*",
-    "*://*.testholic.com/*",
+    "*://*.localhost/*",
+    "*://*.examprepper.co/*",
     "*://*.examtopics.com/*",
-    "http://localhost/*"
-  ],
-  "optional_host_permissions": [
-    "*://*/*"
+    "*://*.quizlet.com/*",
+    "https://server.passorrefund.io/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -24,9 +28,11 @@
   "content_scripts": [
     {
       "matches": [
+        "*://*.localhost/*",
         "*://*.examgrill.com/*",
-        "*://*.testholic.com/*",
-        "*://*.examtopics.com/*"
+        "*://*.examprepper.co/*",
+        "*://*.examtopics.com/*",
+        "*://*.quizlet.com/*"
       ],
       "js": [
         "sites.generated.js",
@@ -37,7 +43,13 @@
     }
   ],
   "action": {
-    "default_title": "Exam Question Scraper",
-    "default_popup": "popup.html"
+    "default_title": "Exam Questions to PDF",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/16.png",
+      "32": "icons/32.png",
+      "48": "icons/48.png",
+      "128": "icons/128.png"
+    }
   }
 }
