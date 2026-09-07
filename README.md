@@ -4,6 +4,10 @@
 
 [![Install Exam Questions to PDF from the Chrome Web Store](assets/chrome-extension.jpg)](https://chromewebstore.google.com/detail/exam-questions-to-pdf/pkibkbaiknmegdhkengmjbjgeaaoihop)
 
+<video src="assets/examtopics%20to%20pdf.mp4" controls title="Exam Questions to PDF demo"></video>
+
+[Watch the demo video](assets/examtopics%20to%20pdf.mp4)
+
 
 Helps save exam `/view` pages on the configured sites as you browse them, then exports each exam as its own PDF - one file per exam.
 **Install:** `chrome://extensions` → turn on **Developer mode** → **Load unpacked** → select `extension/`, then pin it so the badge is visible.
